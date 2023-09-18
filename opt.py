@@ -191,7 +191,7 @@ def opt_sequential(model, dataloader, dev, args):
 
 
 @torch.no_grad()
-def opt_eval(model, testenc, dev):
+def opt_eval(model, testenc, dev, test_meta):
     # print('Evaluating ...')
 
     testenc = testenc.input_ids
@@ -295,6 +295,10 @@ def opt_eval(model, testenc, dev):
         nlls.append(neg_log_likelihood)
     ppl = torch.exp(torch.stack(nlls).sum() / (nsamples * model.seqlen))
     print(ppl.item())
+
+    with open('perplexity.txt', 'a') as result_f:
+        method = test_meta['args'].quant if test_meta['args'].wbits < 16 else ""
+        result_f.write(f"{test_meta['args'].model},{test_meta['dataset']},{test_meta['args'].wbits},{method},{ppl.item()}\n")
 
     model.config.use_cache = use_cache
 
@@ -653,5 +657,5 @@ if __name__ == '__main__':
                                                 model=args.model,
                                                 seqlen=model.seqlen)
             print(dataset)
-            opt_eval(model, testloader, DEV)
+            opt_eval(model, testloader, DEV, dict(args=args, dataset=dataset))
 
