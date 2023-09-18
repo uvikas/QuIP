@@ -22,3 +22,9 @@ facebook/opt-1.3b,c4-new,3,ldlq,18.046056747436523
 facebook/opt-1.3b,wikitext2,3,ldlq,16.777645111083984
 facebook/opt-1.3b,ptb-new,3,ldlq,23.328697204589844
 facebook/opt-1.3b,c4-new,3,ldlq,17.98581886291504
+facebook/opt-1.3b,wikitext2,4,ldlq,15.902050018310547
+facebook/opt-1.3b,ptb-new,4,ldlq,21.81170654296875
+facebook/opt-1.3b,c4-new,4,ldlq,17.15911102294922
+facebook/opt-1.3b,wikitext2,4,ldlq,16.166336059570312
+facebook/opt-1.3b,ptb-new,4,ldlq,22.127586364746094
+facebook/opt-1.3b,c4-new,4,ldlq,17.360980987548828
