@@ -11,6 +11,12 @@ from quant import *
 
 from tqdm import tqdm
 
+from copy import deepcopy
+
+
+model_copy = None
+
+
 def get_opt(model):
     import torch
 
@@ -177,9 +183,9 @@ def opt_sequential(model, dataloader, dev, args):
             Hmags.append(quant_method[name].Hmag)
             quant_method[name].free()
             
-            if i == 0 and name == 'self_attn.k_proj':
-                print(quant_method[name].quantized_weights)
-                print(quant_method[name].layer.weight.data)
+            # if i == 0 and name == 'fc1':
+                # print(quant_method[name].quantized_weights)
+                # print(quant_method[name].layer.weight.data)
 
         # Get outputs from dequantized weights to feed into next layer
         for j in range(args.nsamples):
@@ -212,7 +218,7 @@ def opt_eval(model, testenc, dev, args, test_meta):
     # print('Evaluating ...')
 
     testenc = testenc.input_ids
-    nsamples = testenc.numel() // model.seqlen
+    nsamples = testenc.numel() // model.seqlen # 1
 
     use_cache = model.config.use_cache
     model.config.use_cache = False
@@ -333,6 +339,7 @@ def opt_pack3(model, quantizers):
         print(name)
         quantizers[name] = quantizers[name].cpu()
         qlayers[name].pack(layers[name], quantizers[name].scale, quantizers[name].scaleWH)
+        
     print('Done.')
     return model
 
@@ -610,6 +617,11 @@ if __name__ == '__main__':
         help='lazy batch updates in blocks as used in OPTQ')
 
     args = parser.parse_args()
+    
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    
     # defaults to incoherence processing
     if args.incoh_processing:
         args.pre_gptqH   = True
@@ -664,7 +676,17 @@ if __name__ == '__main__':
     #     exit()
 
     if args.save:
+        # model_copy = deepcopy(model)
         opt_pack3(model, quantizers)
+        model.eval()
+        
+        # model = model.to(DEV)
+        # model_copy = model_copy.to(DEV)
+        # print(model_copy.model.decoder.layers[0].fc1.weight.data)
+        # print(model.model.decoder.layers[0].fc1.dequantize())
+        # model = model.to('cpu')
+        # model_copy = model_copy.to('cpu')
+        
         torch.save(model.state_dict(), args.save)
 
     if not args.proxy_only:

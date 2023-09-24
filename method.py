@@ -16,7 +16,7 @@ DEBUG = False
 
 def butterfly_factors(n):
     pf = list(primefac.primefac(n))
-    return (math.prod(pf[0::2]), math.prod(pf[1::2]))
+    return (math.prod(pf[0::5]), math.prod(pf[1::5]), math.prod(pf[2::5]), math.prod(pf[3::5]), math.prod(pf[4::5]))
 
 def gen_rand_orthos(m,p):
     if (p != 2):

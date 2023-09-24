@@ -238,30 +238,35 @@ class Quant3Linear(nn.Module):
         self.qweight = intweight.to(torch.int)
     
     def dequantize(self):
-        # Postprocessing
-        t = time.perf_counter()
         w = self.qweight.t().to(torch.half)
-        w = (w / (2**4-1)) * 2 - 1
-        w = w * self.scale
-        print('\tscale', time.perf_counter() - t)
         
         # Apply U and V to revert incoherence
         t = time.perf_counter()
         torch.manual_seed(0xCADE)
         torch.cuda.manual_seed(0xCADE)
         np.random.seed(0xCADE)
-        print('\tseed', time.perf_counter() - t)
+        print('\tSet Seed:\t', time.perf_counter() - t)
         
         t = time.perf_counter()
         U = method.rand_ortho_butterfly(w.shape[0]).to(torch.half).to(w.device)
         V = method.rand_ortho_butterfly(w.shape[1]).to(torch.half).to(w.device)
+        print('\tGen U and V:\t', time.perf_counter() - t)
+        
+        # Postprocessing
+        t = time.perf_counter()
+        w = (w / (2**4-1)) * 2 - 1
+        w = w * self.scale
+        print('\tScale:\t', time.perf_counter() - t)
+        
+        t = time.perf_counter()
         w = (U.T @ w @ V)
-        print('\tincoh', time.perf_counter() - t)
+        print('\tRev Incoh:\t', time.perf_counter() - t)
+        
         
         # Revert diagonal scaling 
         t = time.perf_counter()
         w = (w / self.scaleWH[None,:]).to(torch.half)
-        print('\tdiag scaling', time.perf_counter() - t)
+        print('\tRev diag:\t', time.perf_counter() - t)
         return w
 
     def forward(self, x):
