@@ -519,14 +519,21 @@ def quantize_weight_vecbal(w,
         wr = scale * (wr - zero)
         return wr.half()
     elif qfn == 'b':
-        scale = 2.4 * w.square().mean().sqrt() + 1e-16
+        
+        assert scale == 2.4 * w.square().mean().sqrt() + 1e-16
+        assert maxq == 2**nbits - 1
+        
         wr = w / scale
         wr = torch.clamp(((wr+1)/2) * maxq, 0, maxq)
         wr = round_vecbal_Hsort(
             wr, H, nbits, npasses, unbiased=unbiased, qmethod=qmethod,
             lazy_batch=lazy_batch)
-        wr = (wr / maxq) * 2 - 1
-        wr = wr * scale
+        # print(wr)
+        
+        # TODO: Should be done in forward pass
+        # wr = (wr / maxq) * 2 - 1
+        # wr = wr * scale
+        
         return wr.half()
     else:
         return NotImplementedError()

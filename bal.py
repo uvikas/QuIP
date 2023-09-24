@@ -41,9 +41,17 @@ class Balance(QuantMethod):
             qmethod=self.qmethod,
             lazy_batch=lazy_batch
         )
+        
+        self.quantized_weights = quant_w.clone()
+        
+        quant_w = (quant_w / self.quantizer.maxq) * 2 - 1
+        quant_w = quant_w * self.quantizer.scale
+        
         self.layer.weight.data = quant_w
+        
+        # Postprocessing must be done in forward pass
         self.postproc()
+        
         # print('time %.2f' % (time.time() - tick))
         self.time = time.time() - tick
         self.error_compute(w, quant_w)
-

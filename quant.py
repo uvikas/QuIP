@@ -1,7 +1,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import time
 
+import method
 
 def quantize_qfna(x, scale, zero, maxq):
     q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
@@ -27,6 +30,7 @@ class Quantizer(nn.Module):
         self.register_buffer('maxq', torch.tensor(0))
         self.register_buffer('scale', torch.zeros(shape))
         self.register_buffer('zero', torch.zeros(shape))
+        self.scaleWH = None
 
     def configure(self,
                   bits,
@@ -138,7 +142,7 @@ class Quantizer(nn.Module):
     def find_params_qfnb(self, x):
         dev = x.device
         self.maxq  = self.maxq.to(dev)
-        self.scale = None  #needs to be calculated after preproc
+        self.scale = 2.4 * x.square().mean().sqrt() + 1e-16 
         self.zero  = None
 
     def quantize(self, x):
@@ -174,63 +178,109 @@ class Quant3Linear(nn.Module):
 
     def __init__(self, infeatures, outfeatures):
         super().__init__()
-        self.register_buffer('zeros', torch.zeros((outfeatures, 1)))
-        self.register_buffer('scales', torch.zeros((outfeatures, 1)))
+        # self.register_buffer('zeros', torch.zeros((outfeatures, 1)))
+        self.register_buffer('scaleWH', torch.zeros((infeatures)))
+        self.register_buffer('scale', torch.zeros(()))
         self.register_buffer('bias', torch.zeros(outfeatures))
         self.register_buffer(
             'qweight',
-            torch.zeros((infeatures // 1024 * 96, outfeatures),
+            torch.zeros((infeatures, outfeatures),
                         dtype=torch.int))
+        
+        # self.register_buffer(
+        #     'qweight',
+        #     torch.zeros((infeatures // 32 * 3, outfeatures),
+        #                 dtype=torch.int))
 
-    def pack(self, linear, scales, zeros):
-        self.zeros = zeros * scales
-        self.scales = scales.clone()
+    def pack(self, linear, scale, scaleWH):
+        # self.zeros = zeros * scales
+        # self.scales = scales.clone()
+        assert linear.bias.shape == self.bias.shape
         self.bias = linear.bias.clone()
+        
+        assert self.scale.shape == scale.shape
+        self.scale = scale.reshape(1).clone()
+        
+        assert self.scaleWH.shape == scaleWH.shape
+        self.scaleWH = scaleWH.clone()
+        # intweight = torch.round(
+        #     (linear.weight.data + self.zeros) / self.scales).to(torch.int)
+        intweight = linear.weight.data.t().contiguous()
+        
+        # intweight = intweight.numpy().astype(np.uint32)
+        # qweight = np.zeros(
+        #     (intweight.shape[0] // 32 * 3, intweight.shape[1]),
+        #     dtype=np.uint32)
+        # i = 0
+        # row = 0
+        # while row < qweight.shape[0]:
+        #     for j in range(i, i + 10):
+        #         qweight[row] |= intweight[j] << (3 * (j - i))
+        #     i += 10
+        #     qweight[row] |= intweight[i] << 30
+        #     row += 1
+        #     qweight[row] |= (intweight[i] >> 2) & 1
+        #     i += 1
+        #     for j in range(i, i + 10):
+        #         qweight[row] |= intweight[j] << (3 * (j - i) + 1)
+        #     i += 10
+        #     qweight[row] |= intweight[i] << 31
+        #     row += 1
+        #     qweight[row] |= (intweight[i] >> 1) & 0x3
+        #     i += 1
+        #     for j in range(i, i + 10):
+        #         qweight[row] |= intweight[j] << (3 * (j - i) + 2)
+        #     i += 10
+        #     row += 1
 
-        intweight = torch.round(
-            (linear.weight.data + self.zeros) / self.scales).to(torch.int)
-        intweight = intweight.t().contiguous()
-        intweight = intweight.numpy().astype(np.uint32)
-        qweight = np.zeros(
-            (intweight.shape[0] // 1024 * 96, intweight.shape[1]),
-            dtype=np.uint32)
-        i = 0
-        row = 0
-        while row < qweight.shape[0]:
-            for j in range(i, i + 10):
-                qweight[row] |= intweight[j] << (3 * (j - i))
-            i += 10
-            qweight[row] |= intweight[i] << 30
-            row += 1
-            qweight[row] |= (intweight[i] >> 2) & 1
-            i += 1
-            for j in range(i, i + 10):
-                qweight[row] |= intweight[j] << (3 * (j - i) + 1)
-            i += 10
-            qweight[row] |= intweight[i] << 31
-            row += 1
-            qweight[row] |= (intweight[i] >> 1) & 0x3
-            i += 1
-            for j in range(i, i + 10):
-                qweight[row] |= intweight[j] << (3 * (j - i) + 2)
-            i += 10
-            row += 1
-
-        qweight = qweight.astype(np.int32)
-        self.qweight = torch.from_numpy(qweight)
+        # qweight = qweight.astype(np.int32)
+        # self.qweight = torch.from_numpy(qweight)
+        self.qweight = intweight.to(torch.int)
+    
+    def dequantize(self):
+        # Postprocessing
+        t = time.perf_counter()
+        w = self.qweight.t().to(torch.half)
+        w = (w / (2**4-1)) * 2 - 1
+        w = w * self.scale
+        print('\tscale', time.perf_counter() - t)
+        
+        # Apply U and V to revert incoherence
+        t = time.perf_counter()
+        torch.manual_seed(0xCADE)
+        torch.cuda.manual_seed(0xCADE)
+        np.random.seed(0xCADE)
+        print('\tseed', time.perf_counter() - t)
+        
+        t = time.perf_counter()
+        U = method.rand_ortho_butterfly(w.shape[0]).to(torch.half).to(w.device)
+        V = method.rand_ortho_butterfly(w.shape[1]).to(torch.half).to(w.device)
+        w = (U.T @ w @ V)
+        print('\tincoh', time.perf_counter() - t)
+        
+        # Revert diagonal scaling 
+        t = time.perf_counter()
+        w = (w / self.scaleWH[None,:]).to(torch.half)
+        print('\tdiag scaling', time.perf_counter() - t)
+        return w
 
     def forward(self, x):
-        if x.shape[-1] == x.numel():
-            outshape = list(x.shape)
-            y = self.bias.clone()
-            outshape[-1] = self.bias.numel()
-            dtype = x.dtype
-            x = x.float()
-            quant_cuda.vecquant3matmul(x, self.qweight, y, self.scales,
-                                       self.zeros)
-            y = y.to(dtype)
-            return y.reshape(outshape)
-        raise ValueError('Only supports a single token currently.')
+        # print(x.shape)
+        w = self.dequantize()
+        return F.linear(x, w, self.bias)
+        
+        
+        # if x.shape[-1] == x.numel():
+        #     outshape = list(x.shape)
+        #     y = self.bias.clone()
+        #     outshape[-1] = self.bias.numel()
+        #     dtype = x.dtype
+        #     x = x.float()
+        #     quant_cuda.vecquant3matmul(x, self.qweight, y, self.scales,
+        #                                self.zeros)
+        #     y = y.to(dtype)
+        #     return y.reshape(outshape)
+        # raise ValueError('Only supports a single token currently.')
 
 
 def make_quant3(module, names, name=''):

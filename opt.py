@@ -151,6 +151,9 @@ def opt_sequential(model, dataloader, dev, args):
         for name in subset:
             # print(i, name)
             # print('Quantizing ...')
+            
+            # Preprocessing Step
+            # Must save diag rescaling to quantizer (U and V are reproducibly generated)
             quant_method[name].preproc(
                                 preproc_gptqH=args.pre_gptqH, percdamp=args.percdamp,
                                 preproc_rescale=args.pre_rescale, 
@@ -161,6 +164,11 @@ def opt_sequential(model, dataloader, dev, args):
                 quant_method[name].fasterquant(lazy_batch=args.lazy_batch)
             elif args.quant == 'nearest':
                 quant_method[name].fasterquant()
+                
+            # Save diag rescaling to quantizer
+            quant_method[name].quantizer.scaleWH = quant_method[name].scaleWH.clone()
+            # print(quant_method[name].quantized_weights.shape, quant_method[name].quantizer.scaleWH.shape)
+                
             quantizers['model.decoder.layers.%d.%s' %
                         (i, name)] = quant_method[name].quantizer
 
@@ -168,10 +176,19 @@ def opt_sequential(model, dataloader, dev, args):
             times.append(quant_method[name].time)
             Hmags.append(quant_method[name].Hmag)
             quant_method[name].free()
+            
+            if i == 0 and name == 'self_attn.k_proj':
+                print(quant_method[name].quantized_weights)
+                print(quant_method[name].layer.weight.data)
 
+        # Get outputs from dequantized weights to feed into next layer
         for j in range(args.nsamples):
             outs[j] = layer(inps[j].unsqueeze(0),
                             attention_mask=attention_mask)[0]
+        
+        # Save quantized weights to layer
+        for name in subset:
+            quant_method[name].layer.weight.data = quant_method[name].quantized_weights
 
         layers[i] = layer.cpu()
         del layer
@@ -191,7 +208,7 @@ def opt_sequential(model, dataloader, dev, args):
 
 
 @torch.no_grad()
-def opt_eval(model, testenc, dev, test_meta):
+def opt_eval(model, testenc, dev, args, test_meta):
     # print('Evaluating ...')
 
     testenc = testenc.input_ids
@@ -260,8 +277,10 @@ def opt_eval(model, testenc, dev, test_meta):
         layer = layers[i].to(dev)
 
         for j in range(nsamples):
+            t = time.perf_counter()
             outs[j] = layer(inps[j].unsqueeze(0),
                             attention_mask=attention_mask)[0]
+            print(time.perf_counter() - t)
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()
@@ -313,8 +332,7 @@ def opt_pack3(model, quantizers):
     for name in qlayers:
         print(name)
         quantizers[name] = quantizers[name].cpu()
-        qlayers[name].pack(layers[name], quantizers[name].scale,
-                           quantizers[name].zero)
+        qlayers[name].pack(layers[name], quantizers[name].scale, quantizers[name].scaleWH)
     print('Done.')
     return model
 
@@ -505,7 +523,7 @@ if __name__ == '__main__':
                         help='Seed for sampling the calibration data.')
     parser.add_argument('--nsamples',
                         type=int,
-                        default=128,
+                        default=1,
                         help='Number of calibration data samples.')
     parser.add_argument(
         '--percdamp',
@@ -646,16 +664,16 @@ if __name__ == '__main__':
     #     exit()
 
     if args.save:
-    #     opt_pack3(model, quantizers)
+        opt_pack3(model, quantizers)
         torch.save(model.state_dict(), args.save)
 
     if not args.proxy_only:
         # for dataset in ['wikitext2', 'ptb', 'c4']:
-        for dataset in ['wikitext2', 'ptb-new', 'c4-new']:
+        for dataset in ['c4-new']:
             dataloader, testloader = get_loaders(dataset,
                                                 seed=args.seed,
                                                 model=args.model,
                                                 seqlen=model.seqlen)
             print(dataset)
-            opt_eval(model, testloader, DEV, dict(args=args, dataset=dataset))
+            opt_eval(model, testloader, DEV, args, dict(args=args, dataset=dataset))
 

@@ -7,6 +7,7 @@ import transformers
 
 import primefac
 import scipy
+import numpy as np
 import math
 
 from quant import Quantizer
@@ -158,6 +159,10 @@ class QuantMethod:
             w = self.layer.weight.data.clone().to(torch.float32)
             H = self.H.data.clone().to(torch.float32)
             # 
+            torch.manual_seed(0xCADE)
+            torch.cuda.manual_seed(0xCADE)
+            np.random.seed(0xCADE)
+            
             if preproc_proj_extra == 0:
                 U = rand_ortho_butterfly(w.shape[0]).to(torch.float32).to(w.device)
                 V = rand_ortho_butterfly(w.shape[1]).to(torch.float32).to(w.device)
@@ -207,6 +212,7 @@ class QuantMethod:
             w = self.layer.weight.data.clone()
             H = self.H.data.clone()
             scaleWH = self.scaleWH.to(w.device)
+            # print(w.shape, scaleWH.shape)
             w = w / scaleWH[None,:]
             H = H * scaleWH[:,None]
             H = H * scaleWH[None,:]
