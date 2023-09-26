@@ -281,12 +281,18 @@ def opt_eval(model, testenc, dev, args, test_meta):
     for i in tqdm(range(len(layers))):
         # print(i)
         layer = layers[i].to(dev)
-
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        
         for j in range(nsamples):
-            t = time.perf_counter()
+            # t = time.perf_counter()
+            start.record()
             outs[j] = layer(inps[j].unsqueeze(0),
                             attention_mask=attention_mask)[0]
-            print(time.perf_counter() - t)
+            end.record()
+            end.synchronize()
+            print("layer", i, "sample", j, start.elapsed_time(end))
+            # print(time.perf_counter() - t)
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()

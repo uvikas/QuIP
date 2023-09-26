@@ -15,8 +15,12 @@ from quant import Quantizer
 DEBUG = False
 
 def butterfly_factors(n):
-    pf = list(primefac.primefac(n))
-    return (math.prod(pf[0::5]), math.prod(pf[1::5]), math.prod(pf[2::5]), math.prod(pf[3::5]), math.prod(pf[4::5]))
+    pf = tuple(primefac.primefac(n))
+    # return (
+    #     math.prod(pf[0::2]), 
+    #     math.prod(pf[1::2]), 
+    # )
+    return pf
 
 def gen_rand_orthos(m,p):
     if (p != 2):
@@ -33,19 +37,27 @@ def gen_rand_orthos(m,p):
 
 # generates a random orthogonal butterfly matrix of dimension n
 def gen_rand_ortho_butterfly(n):
-    return ([gen_rand_orthos(n//p, p) for p in butterfly_factors(n)], torch.randperm(n), torch.randperm(n))
+    factors = butterfly_factors(n)
+    return ([gen_rand_orthos(1, p).to('cuda:0') for p in factors], torch.randperm(n).to('cuda:0'), torch.randperm(n).to('cuda:0'), factors)
 
 # generates a random orthogonal butterfly matrix of dimension n, without blocking
 def gen_rand_ortho_butterfly_noblock(n):
-    return ([gen_rand_orthos(1, p) for p in butterfly_factors(n)], torch.randperm(n), torch.randperm(n))
+    factors = butterfly_factors(n)
+    return ([gen_rand_orthos(1, p) for p in factors], torch.randperm(n), torch.randperm(n), factors)
 
 # generates a random orthogonal butterfly matrix of dimension n, no permutation, but yes blocking
 def gen_rand_ortho_butterfly_nopermute(n):
-    return ([gen_rand_orthos(n//p, p) for p in butterfly_factors(n)], torch.arange(n), torch.arange(n))
+    factors = butterfly_factors(n)
+    return ([gen_rand_orthos(n//p, p) for p in factors], torch.arange(n), torch.arange(n), factors)
 
 # multiply by a random orthogonal butterfly matrix
 def mul_ortho_butterfly(Bpp, x):
-    (B, p_in, p_out) = Bpp
+    (B, p_in, p_out, pfn) = Bpp
+
+    # p_in = p_in.to('cuda:0')
+    # p_out = p_out.to('cuda:0')
+    # x = x.to('cuda:0')
+    
     assert((len(x.shape) == 1) or (len(x.shape) == 2))
     orig_dim = 2
     if (len(x.shape) == 1):
@@ -54,14 +66,22 @@ def mul_ortho_butterfly(Bpp, x):
         orig_dim = 1
     (n,q) = x.shape
     x = x[p_in,:]
-    pfn = tuple(butterfly_factors(n))
+    
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    
     for i in range(len(pfn)):
+        start.record()
         mpfx = math.prod(pfn[0:i])
         p = pfn[i]
         msfx = math.prod(pfn[(i+1):])
         x = x.reshape(mpfx, p, msfx, q).permute(0,2,1,3).reshape(mpfx * msfx, p, q)
         x = B[i] @ x
         x = x.reshape(mpfx, msfx, p, q).permute(0,2,1,3).reshape(n,q)
+        end.record()
+        end.synchronize()
+        print('\t\t\tMul Loop', i, start.elapsed_time(end))
+        
     x = x[p_out,:]
     if (orig_dim == 1):
         x = x.reshape(n)
@@ -70,7 +90,28 @@ def mul_ortho_butterfly(Bpp, x):
 # generates a random orthogonal butterfly matrix of dimension n
 # and converts it to a dense matrix
 def rand_ortho_butterfly(n):
-    return mul_ortho_butterfly(gen_rand_ortho_butterfly(n), torch.eye(n))
+    # t = time.perf_counter()
+    start = [torch.cuda.Event(enable_timing=True) for _ in range(2)]
+    end = [torch.cuda.Event(enable_timing=True) for _ in range(2)]
+    
+    start[0].record()
+    mats = gen_rand_ortho_butterfly(n)
+    end[0].record()
+    # print('\t\tgen rand ortho:', time.perf_counter() - t)
+    
+    # t = time.perf_counter()
+    start[1].record()
+    ret = mul_ortho_butterfly(mats, torch.eye(n).to('cuda:0'))
+    end[1].record()
+    
+    for i in range(2):
+        end[i].synchronize()
+    
+    print('\t\t', "Gen", start[0].elapsed_time(end[0]))
+    print('\t\t', "Mul", start[1].elapsed_time(end[1]))
+    
+    # print('\t\tmul ortho:', time.perf_counter() - t)
+    return ret
 
 def rand_ortho_butterfly_noblock(n):
     return mul_ortho_butterfly(gen_rand_ortho_butterfly_noblock(n), torch.eye(n))
@@ -177,7 +218,7 @@ class QuantMethod:
             #H = H.to(torch.float32)
             H = H * (H.shape[0] / (torch.trace(H) + 1e-8)) + 1e-2 * torch.eye(H.shape[0], device=w.device)
             H = H.to(torch.float32)
-            w = U @ w @ V.T
+            w = U.T @ w @ V.T
             H = V @ H @ V.T
             self.projU = U.cpu()
             self.projV = V.cpu()
