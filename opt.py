@@ -468,15 +468,11 @@ def benchmark(model, input_ids, check=False):
     torch.cuda.synchronize()
 
     cache = {'past': None}
-
     def clear_past(i):
-
         def tmp(layer, inp, out):
             if cache['past']:
                 cache['past'][i] = None
-
         return tmp
-
     for i, layer in enumerate(model.model.decoder.layers):
         layer.register_forward_hook(clear_past(i))
 
@@ -492,22 +488,28 @@ def benchmark(model, input_ids, check=False):
                 torch.cuda.synchronize(gpu)
         else:
             torch.cuda.synchronize()
-
     with torch.no_grad():
         attention_mask = torch.ones((1, input_ids.numel()), device=DEV)
         times = []
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
         for i in range(input_ids.numel()):
-            tick = time.time()
-            out = model(input_ids[:, i].reshape(-1),
-                        past_key_values=cache['past'],
-                        attention_mask=attention_mask[:, :(i + 1)].reshape(
-                            (1, -1)))
+            # tick = time.perf_counter()
+            start.record()
+            out = model(
+                input_ids[:, i].reshape((1,-1)),
+                past_key_values=cache['past'],
+                attention_mask=attention_mask[:, :(i + 1)].reshape((1, -1))
+            )
+            end.record()
+            end.synchronize()
             sync()
-            times.append(time.time() - tick)
-            print(i, times[-1])
+            times.append(start.elapsed_time(end))
+            print(times[-1], input_ids.shape)
+            # times.append(time.perf_counter() - tick)
+            # print(i, times[-1])
             if check and i != input_ids.numel() - 1:
-                tot += loss(out.logits[0].to(DEV),
-                            input_ids[:, (i + 1)].to(DEV)).float()
+                tot += loss(out.logits[0].to(DEV), input_ids[:, (i + 1)].to(DEV)).float()
             cache['past'] = list(out.past_key_values)
             del out
         sync()
@@ -694,6 +696,13 @@ if __name__ == '__main__':
         # model_copy = model_copy.to('cpu')
         
         torch.save(model.state_dict(), args.save)
+        
+    model = model.to(DEV)
+    input_ids = next(iter(dataloader))[0][:, :128]
+    benchmark(model, input_ids, check=True)
+        
+    exit()
+        
 
     if not args.proxy_only:
         # for dataset in ['wikitext2', 'ptb', 'c4']:

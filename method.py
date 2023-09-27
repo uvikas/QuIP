@@ -24,7 +24,7 @@ def butterfly_factors(n):
 
 def gen_rand_orthos(m,p):
     if (p != 2):
-        return torch.tensor(scipy.stats.special_ortho_group.rvs(p, size=m)).to(torch.float32)
+        return torch.tensor(scipy.stats.special_ortho_group.rvs(p, size=m)).to(torch.half)
     X = torch.zeros(m,2,2)
     t = torch.rand(m) * (2 * math.pi) 
     sin_t = torch.sin(t)
@@ -33,7 +33,7 @@ def gen_rand_orthos(m,p):
     X[:,1,1] = cos_t
     X[:,0,1] = sin_t
     X[:,1,0] = -sin_t
-    return X
+    return X.to(torch.half)
 
 # generates a random orthogonal butterfly matrix of dimension n
 def gen_rand_ortho_butterfly(n):
@@ -53,6 +53,7 @@ def gen_rand_ortho_butterfly_nopermute(n):
 # multiply by a random orthogonal butterfly matrix
 def mul_ortho_butterfly(Bpp, x):
     (B, p_in, p_out, pfn) = Bpp
+    
 
     # p_in = p_in.to('cuda:0')
     # p_out = p_out.to('cuda:0')
@@ -67,20 +68,20 @@ def mul_ortho_butterfly(Bpp, x):
     (n,q) = x.shape
     x = x[p_in,:]
     
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
+    # start = torch.cuda.Event(enable_timing=True)
+    # end = torch.cuda.Event(enable_timing=True)
     
     for i in range(len(pfn)):
-        start.record()
+        # start.record()
         mpfx = math.prod(pfn[0:i])
         p = pfn[i]
         msfx = math.prod(pfn[(i+1):])
         x = x.reshape(mpfx, p, msfx, q).permute(0,2,1,3).reshape(mpfx * msfx, p, q)
         x = B[i] @ x
         x = x.reshape(mpfx, msfx, p, q).permute(0,2,1,3).reshape(n,q)
-        end.record()
-        end.synchronize()
-        print('\t\t\tMul Loop', i, start.elapsed_time(end))
+        # end.record()
+        # end.synchronize()
+        # print('\t\t\tMul Loop', i, start.elapsed_time(end))
         
     x = x[p_out,:]
     if (orig_dim == 1):
@@ -101,7 +102,7 @@ def rand_ortho_butterfly(n):
     
     # t = time.perf_counter()
     start[1].record()
-    ret = mul_ortho_butterfly(mats, torch.eye(n).to('cuda:0'))
+    ret = mul_ortho_butterfly(mats, torch.eye(n).to(torch.half).to('cuda:0'))
     end[1].record()
     
     for i in range(2):

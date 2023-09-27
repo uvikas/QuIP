@@ -244,57 +244,62 @@ class Quant3Linear(nn.Module):
     
 
     def forward(self, x):
-        print(x.shape)
+        # print(x.shape)
+        if x.numel() != x.shape[-1]:
+            raise ValueError('Only supports a single token currently.')
+
+        x = x.reshape(1, -1)
+        
         w = self.qweight.t().to(torch.half)
         
-        w_fast = w.clone()
+        w_fast = w
         
         # Apply U and V to revert incoherence
         # t = time.perf_counter()
-        self.start[0].record()
-        torch.manual_seed(0xCADE)
-        torch.cuda.manual_seed(0xCADE)
-        np.random.seed(0xCADE)
-        self.end[0].record()
-        # print('\tSet Seed:\t', time.perf_counter() - t)
+        # self.start[0].record()
+        # torch.manual_seed(0xCADE)
+        # torch.cuda.manual_seed(0xCADE)
+        # np.random.seed(0xCADE)
+        # self.end[0].record()
+        # # print('\tSet Seed:\t', time.perf_counter() - t)
         
-        # t = time.perf_counter()
-        self.start[1].record()
-        U = method.rand_ortho_butterfly(w.shape[0]).to(torch.half).to(w.device)
-        V = method.rand_ortho_butterfly(w.shape[1]).to(torch.half).to(w.device)
-        self.end[1].record()
-        # print(w.shape[0], w.shape[1])
-        # print('\tGen U and V:\t', time.perf_counter() - t)
+        # # t = time.perf_counter()
+        # self.start[1].record()
+        # U = method.rand_ortho_butterfly(w.shape[0]).to(torch.half).to(w.device)
+        # V = method.rand_ortho_butterfly(w.shape[1]).to(torch.half).to(w.device)
+        # self.end[1].record()
+        # # print(w.shape[0], w.shape[1])
+        # # print('\tGen U and V:\t', time.perf_counter() - t)
         
-        # Postprocessing
-        # t = time.perf_counter()
-        self.start[2].record()
-        w = (w / (2**4-1)) * 2 - 1
-        w = w * self.scale
-        self.end[2].record()
-        # print('\tScale:\t', time.perf_counter() - t)
+        # # Postprocessing
+        # # t = time.perf_counter()
+        # self.start[2].record()
+        # w = (w / (2**4-1)) * 2 - 1
+        # w = w * self.scale
+        # self.end[2].record()
+        # # print('\tScale:\t', time.perf_counter() - t)
         
-        # t = time.perf_counter()
-        self.start[3].record()
-        w = (U @ w @ V)
-        self.end[3].record()
-        # print('\tRev Incoh:\t', time.perf_counter() - t)
+        # # t = time.perf_counter()
+        # self.start[3].record()
+        # w = (U @ w @ V)
+        # self.end[3].record()
+        # # print('\tRev Incoh:\t', time.perf_counter() - t)
         
-        # Revert diagonal scaling 
-        # t = time.perf_counter()
-        self.start[4].record()
-        w = (w / self.scaleWH[None,:]).to(torch.half)
-        self.end[4].record()
-        # print('\tRev diag:\t', time.perf_counter() - t)
+        # # Revert diagonal scaling 
+        # # t = time.perf_counter()
+        # self.start[4].record()
+        # w = (w / self.scaleWH[None,:]).to(torch.half)
+        # self.end[4].record()
+        # # print('\tRev diag:\t', time.perf_counter() - t)
         
-        for i in range(len(self.start)-1):
-            self.end[i].synchronize()
+        # for i in range(len(self.start)-1):
+        #     self.end[i].synchronize()
         
-        for i in range(len(self.start)-1):
-            print("\t", self.events[i], '\t', self.start[i].elapsed_time(self.end[i]))
+        # for i in range(len(self.start)-1):
+        #     print("\t", self.events[i], '\t', self.start[i].elapsed_time(self.end[i]))
             
-        # self.start[5].record()
-        out = F.linear(x, w, self.bias)
+        # # self.start[5].record()
+        # out = F.linear(x, w, self.bias)
         # self.end[5].record()
         # self.end[5].synchronize()
         
@@ -305,34 +310,53 @@ class Quant3Linear(nn.Module):
         
         # Trying new faster method
         
-        # torch.manual_seed(0xCADE)
-        # torch.cuda.manual_seed(0xCADE)
-        # np.random.seed(0xCADE)
+        self.start[0].record()
+        torch.manual_seed(0xCADE)
+        torch.cuda.manual_seed(0xCADE)
+        np.random.seed(0xCADE)
+        self.end[0].record()
         
-        # # Apply scalar to w
-        # w_fast = (w_fast / (2**4 - 1)) * 2 - 1
-        # w_fast = w_fast * self.scale
+        # Apply scalar to w (outfeat, infeat)
+        self.start[1].record()
+        w_fast = (w_fast / (2**4 - 1)) * 2 - 1
+        w_fast = w_fast * self.scale
+        self.end[1].record()
         
-        # # Generate random orthogonal submatrices
-        # Us = method.gen_rand_ortho_butterfly(w.shape[0])
-        # Vs = method.gen_rand_ortho_butterfly(w.shape[1])
+        # Generate random orthogonal submatrices (infeat, infeat) and (outfeat, outfeat)
+        self.start[2].record()
+        Us = method.gen_rand_ortho_butterfly(w.shape[0])
+        Vs = method.gen_rand_ortho_butterfly(w.shape[1])
+        self.end[2].record()
         
-        # # out = x W^T + b
-        # # W = U^T W' V
-        # # W x^T = U^T W' V x^T
-        # x = x / self.scaleWH
-        # x = method.mul_ortho_butterfly(Vs, x)
-        # x = w_fast @ x
-        # x = method.mul_ortho_butterfly(Us, x)
+        # out = x W^T + b
+        # W = U^T W' V
+        # W x^T = U^T W' V x^T
         
-        # x = x + self.bias
+        # x (batch, seqlen, inp dim)
+        # scaleWH (inp dim)
+        self.start[3].record()
+        out1 = (x / self.scaleWH).to(torch.half).T
+        # print(out1.shape)
+        out1 = method.mul_ortho_butterfly(Vs, out1)
+        out1 = w_fast @ out1
+        out1 = method.mul_ortho_butterfly(Us, out1).T
+        self.end[3].record()
         
+        # print(out1.shape, self.bias.shape)
         
+        out1 = out1 + self.bias
+        # print(out, out1)
         
+        # assert torch.allclose(out, out1)
         
+        for i in range(4):
+            self.end[i].synchronize()
         
-        return out
+        ev = ["Set Seed", "Scale", "Gen U and V", "Apply U and V"]
+        for i in range(4):
+            print("\t", ev[i], '\t', self.start[i].elapsed_time(self.end[i]))
         
+        return out1
         
         # if x.shape[-1] == x.numel():
         #     outshape = list(x.shape)
